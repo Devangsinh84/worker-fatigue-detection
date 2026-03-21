@@ -1,7 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from "react"
 import { AlertTriangle, Eye, EyeOff, Activity, Wifi, WifiOff } from "lucide-react"
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts"
 
 const CLOSED_FRAMES_LIMIT = 30
+const MAX_CHART_POINTS    = 50
 
 export default function App() {
   const videoRef        = useRef(null)
@@ -10,25 +12,64 @@ export default function App() {
   const intervalRef     = useRef(null)
   const trackingRef     = useRef(null)
   const detectorRef     = useRef(null)
+  const audioCtxRef     = useRef(null)
+  const hasAlertedRef   = useRef(false)
   const isRunningRef    = useRef(false)
   const closedFramesRef = useRef(0)
+  const totalFramesRef  = useRef(0)
+  const closedTotalRef  = useRef(0)
+  const sessionTimerRef = useRef(null)
 
-  const [running, setRunning]           = useState(false)
-  const [status, setStatus]             = useState("idle")
-  const [ear, setEar]                   = useState(0)
-  const [cnnScore, setCnnScore]         = useState(0)
-  const [closedFrames, setClosedFrames] = useState(0)
-  const [fatigue, setFatigue]           = useState(false)
-  const [faceDetected, setFaceDetected] = useState(false)
-  const [apiOnline, setApiOnline]       = useState(false)
-  const [showTracking, setShowTracking] = useState(true)
-  const [earThreshold, setEarThreshold] = useState(0.204)
-  const [faceBox, setFaceBox] = useState(null)
+  const [running, setRunning]             = useState(false)
+  const [status, setStatus]               = useState("idle")
+  const [ear, setEar]                     = useState(0)
+  const [cnnScore, setCnnScore]           = useState(0)
+  const [closedFrames, setClosedFrames]   = useState(0)
+  const [fatigue, setFatigue]             = useState(false)
+  const [faceDetected, setFaceDetected]   = useState(false)
+  const [apiOnline, setApiOnline]         = useState(false)
+  const [showTracking, setShowTracking]   = useState(true)
+  const [earThreshold, setEarThreshold]   = useState(0.204)
+  const [faceBox, setFaceBox]             = useState(null)
+  const [sessionTime, setSessionTime]     = useState(0)
+  const [fatigueCount, setFatigueCount]   = useState(0)
+  const [closedPercent, setClosedPercent] = useState(0)
+  const [earHistory, setEarHistory]       = useState([])
 
   useEffect(() => {
     fetch("http://localhost:8000")
       .then(() => setApiOnline(true))
       .catch(() => setApiOnline(false))
+  }, [])
+
+  const formatTime = (secs) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, "0")
+    const s = (secs % 60).toString().padStart(2, "0")
+    return `${m}:${s}`
+  }
+
+  const playAlert = useCallback(() => {
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      }
+      const ctx = audioCtxRef.current
+      const playBeep = (freq, start, duration) => {
+        const osc      = ctx.createOscillator()
+        const gainNode = ctx.createGain()
+        osc.connect(gainNode)
+        gainNode.connect(ctx.destination)
+        osc.frequency.value = freq
+        osc.type            = "sine"
+        gainNode.gain.setValueAtTime(0.3, ctx.currentTime + start)
+        gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration)
+        osc.start(ctx.currentTime + start)
+        osc.stop(ctx.currentTime  + start + duration)
+      }
+      playBeep(880, 0,    0.3)
+      playBeep(660, 0.35, 0.3)
+      playBeep(880, 0.70, 0.5)
+    } catch {}
   }, [])
 
   const drawTrackingBox = useCallback(() => {
@@ -40,7 +81,6 @@ export default function App() {
     overlay.height = videoRef.current.videoHeight || overlay.offsetHeight
 
     ctx.clearRect(0, 0, overlay.width, overlay.height)
-
     if (!showTracking || !isRunningRef.current || !faceBox) return
 
     const W = overlay.width
@@ -53,7 +93,7 @@ export default function App() {
     const h   = (faceBox.height + pad * 2) * H
 
     const color  = fatigue             ? "#ef4444" :
-                  status === "closed" ? "#eab308" : "#22c55e"
+                   status === "closed" ? "#eab308" : "#22c55e"
     const now    = Date.now()
     const pulse  = 0.6 + 0.4 * Math.sin(now / 300)
     const corner = 22
@@ -63,21 +103,15 @@ export default function App() {
     ctx.globalAlpha = pulse
     ctx.lineCap     = "round"
 
-    // Top left
-    ctx.beginPath(); ctx.moveTo(x + corner, y); ctx.lineTo(x, y); ctx.lineTo(x, y + corner); ctx.stroke()
-    // Top right
+    ctx.beginPath(); ctx.moveTo(x + corner, y);     ctx.lineTo(x, y);     ctx.lineTo(x, y + corner);     ctx.stroke()
     ctx.beginPath(); ctx.moveTo(x + w - corner, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + corner); ctx.stroke()
-    // Bottom left
     ctx.beginPath(); ctx.moveTo(x + corner, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - corner); ctx.stroke()
-    // Bottom right
     ctx.beginPath(); ctx.moveTo(x + w - corner, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - corner); ctx.stroke()
 
-    // Label above box
     ctx.globalAlpha = 1
     ctx.fillStyle   = color
     ctx.font        = "bold 12px monospace"
     ctx.fillText(fatigue ? "⚠ FATIGUE" : "TRACKING", x + 4, y - 8)
-
   }, [showTracking, faceBox, fatigue, status])
 
   useEffect(() => {
@@ -91,8 +125,10 @@ export default function App() {
     isRunningRef.current = false
     clearInterval(intervalRef.current)
     clearInterval(trackingRef.current)
-    intervalRef.current = null
-    trackingRef.current = null
+    clearInterval(sessionTimerRef.current)
+    intervalRef.current   = null
+    trackingRef.current   = null
+    sessionTimerRef.current = null
     if (videoRef.current?.srcObject) {
       videoRef.current.srcObject.getTracks().forEach(t => t.stop())
       videoRef.current.srcObject = null
@@ -105,10 +141,18 @@ export default function App() {
     setStatus("idle")
     setFatigue(false)
     setFaceDetected(false)
+    setFaceBox(null)
     setEar(0)
     setCnnScore(0)
+    setEarHistory([])
     closedFramesRef.current = 0
+    totalFramesRef.current  = 0
+    closedTotalRef.current  = 0
+    hasAlertedRef.current   = false
     setClosedFrames(0)
+    setSessionTime(0)
+    setFatigueCount(0)
+    setClosedPercent(0)
   }, [])
 
   const startCamera = async () => {
@@ -118,6 +162,15 @@ export default function App() {
       isRunningRef.current = true
       setRunning(true)
       setStatus("alert")
+      totalFramesRef.current  = 0
+      closedTotalRef.current  = 0
+      setSessionTime(0)
+      setFatigueCount(0)
+      setClosedPercent(0)
+      setEarHistory([])
+      sessionTimerRef.current = setInterval(() => {
+        setSessionTime(prev => prev + 1)
+      }, 1000)
     } catch {
       alert("Cannot access camera!")
     }
@@ -140,9 +193,7 @@ export default function App() {
       formData.append("file", blob, "frame.jpg")
 
       try {
-        const res  = await fetch("http://localhost:8000/predict", {
-          method: "POST", body: formData
-        })
+        const res  = await fetch("http://localhost:8000/predict", { method: "POST", body: formData })
         const data = await res.json()
         if (!isRunningRef.current) return
 
@@ -150,6 +201,14 @@ export default function App() {
         setFaceBox(data.face_box || null)
         setEar(data.ear ?? 0)
         setCnnScore(data.cnn_score ?? 0)
+
+        // Update EAR chart history
+        if (data.face_detected && data.ear > 0) {
+          setEarHistory(prev => {
+            const next = [...prev, { ear: parseFloat(data.ear.toFixed(3)) }]
+            return next.length > MAX_CHART_POINTS ? next.slice(-MAX_CHART_POINTS) : next
+          })
+        }
 
         if (!data.face_detected) {
           setStatus("noface")
@@ -160,11 +219,22 @@ export default function App() {
 
         const eyesClosed = data.ear > 0 && data.ear < earThreshold
 
+        totalFramesRef.current += 1
+        if (eyesClosed) closedTotalRef.current += 1
+        setClosedPercent(
+          totalFramesRef.current > 0
+            ? Math.round((closedTotalRef.current / totalFramesRef.current) * 100)
+            : 0
+        )
+
         if (eyesClosed) {
           closedFramesRef.current += 1
         } else {
           closedFramesRef.current = Math.max(0, closedFramesRef.current - 1)
-          if (closedFramesRef.current === 0) setFatigue(false)
+          if (closedFramesRef.current === 0) {
+            setFatigue(false)
+            hasAlertedRef.current = false
+          }
         }
 
         setClosedFrames(closedFramesRef.current)
@@ -172,6 +242,11 @@ export default function App() {
         if (closedFramesRef.current >= CLOSED_FRAMES_LIMIT) {
           setFatigue(true)
           setStatus("fatigue")
+          if (!hasAlertedRef.current) {
+            playAlert()
+            hasAlertedRef.current = true
+            setFatigueCount(prev => prev + 1)
+          }
         } else if (eyesClosed) {
           setStatus("closed")
         } else {
@@ -182,7 +257,7 @@ export default function App() {
         if (isRunningRef.current) setApiOnline(false)
       }
     }, "image/jpeg", 0.8)
-  }, [earThreshold])
+  }, [earThreshold, playAlert])
 
   useEffect(() => {
     if (running) {
@@ -268,6 +343,59 @@ export default function App() {
             </div>
 
             <canvas ref={canvasRef} className="hidden"/>
+
+            {/* Session stats */}
+            {running && (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 text-center">
+                  <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Session time</p>
+                  <p className="text-xl font-bold text-white font-mono">{formatTime(sessionTime)}</p>
+                </div>
+                <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 text-center">
+                  <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Fatigue alerts</p>
+                  <p className={`text-xl font-bold font-mono ${fatigueCount > 0 ? "text-red-400" : "text-green-400"}`}>
+                    {fatigueCount}
+                  </p>
+                </div>
+                <div className="bg-gray-900 border border-gray-700 rounded-xl p-3 text-center">
+                  <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Eyes closed</p>
+                  <p className={`text-xl font-bold font-mono ${
+                    closedPercent > 30 ? "text-red-400" :
+                    closedPercent > 15 ? "text-yellow-400" : "text-green-400"
+                  }`}>
+                    {closedPercent}%
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* EAR history chart */}
+            {running && earHistory.length > 1 && (
+              <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
+                <p className="text-xs text-gray-400 uppercase tracking-wider mb-3">EAR score live chart</p>
+                <ResponsiveContainer width="100%" height={120}>
+                  <LineChart data={earHistory}>
+                    <XAxis hide />
+                    <YAxis domain={[0, 0.5]} hide />
+                    <Tooltip
+                      contentStyle={{ background: "#111827", border: "1px solid #374151", borderRadius: "8px", fontSize: "12px" }}
+                      formatter={(v) => [v.toFixed(3), "EAR"]}
+                      labelFormatter={() => ""}
+                    />
+                    <ReferenceLine y={earThreshold} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1.5}/>
+                    <Line
+                      type="monotone"
+                      dataKey="ear"
+                      stroke={fatigue ? "#ef4444" : status === "closed" ? "#eab308" : "#22c55e"}
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+                <p className="text-xs text-gray-500 mt-1">Red dashed line = fatigue threshold ({earThreshold.toFixed(2)})</p>
+              </div>
+            )}
 
             <div className="flex gap-3">
               {!running ? (
