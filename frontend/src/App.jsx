@@ -23,7 +23,6 @@ export default function App() {
   const [running, setRunning]             = useState(false)
   const [status, setStatus]               = useState("idle")
   const [ear, setEar]                     = useState(0)
-  const [cnnScore, setCnnScore]           = useState(0)
   const [closedFrames, setClosedFrames]   = useState(0)
   const [fatigue, setFatigue]             = useState(false)
   const [faceDetected, setFaceDetected]   = useState(false)
@@ -35,6 +34,7 @@ export default function App() {
   const [fatigueCount, setFatigueCount]   = useState(0)
   const [closedPercent, setClosedPercent] = useState(0)
   const [earHistory, setEarHistory]       = useState([])
+  const [darkMode, setDarkMode] = useState(true)
 
   useEffect(() => {
     fetch("http://localhost:8000")
@@ -70,6 +70,36 @@ export default function App() {
       playBeep(660, 0.35, 0.3)
       playBeep(880, 0.70, 0.5)
     } catch {}
+  }, [])
+
+  const takeScreenshot = useCallback(() => {
+    if (!videoRef.current || !canvasRef.current) return
+    const canvas  = document.createElement("canvas")
+    canvas.width  = videoRef.current.videoWidth
+    canvas.height = videoRef.current.videoHeight
+    const ctx     = canvas.getContext("2d")
+
+    ctx.save()
+    ctx.scale(-1, 1)
+    ctx.drawImage(videoRef.current, -canvas.width, 0)
+    ctx.restore()
+
+    ctx.fillStyle = "rgba(239, 68, 68, 0.15)"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    ctx.fillStyle    = "#ef4444"
+    ctx.font         = "bold 22px monospace"
+    ctx.fillText("⚠ FATIGUE DETECTED", 20, 40)
+
+    ctx.fillStyle = "white"
+    ctx.font      = "14px monospace"
+    const now     = new Date()
+    ctx.fillText(now.toLocaleString(), 20, 65)
+
+    const link    = document.createElement("a")
+    link.download = `fatigue_${now.getTime()}.png`
+    link.href     = canvas.toDataURL("image/png")
+    link.click()
   }, [])
 
   const drawTrackingBox = useCallback(() => {
@@ -143,7 +173,6 @@ export default function App() {
     setFaceDetected(false)
     setFaceBox(null)
     setEar(0)
-    setCnnScore(0)
     setEarHistory([])
     closedFramesRef.current = 0
     totalFramesRef.current  = 0
@@ -200,7 +229,6 @@ export default function App() {
         setFaceDetected(data.face_detected)
         setFaceBox(data.face_box || null)
         setEar(data.ear ?? 0)
-        setCnnScore(data.cnn_score ?? 0)
 
         // Update EAR chart history
         if (data.face_detected && data.ear > 0) {
@@ -244,6 +272,7 @@ export default function App() {
           setStatus("fatigue")
           if (!hasAlertedRef.current) {
             playAlert()
+            takeScreenshot()
             hasAlertedRef.current = true
             setFatigueCount(prev => prev + 1)
           }
@@ -257,7 +286,7 @@ export default function App() {
         if (isRunningRef.current) setApiOnline(false)
       }
     }, "image/jpeg", 0.8)
-  }, [earThreshold, playAlert])
+  }, [earThreshold, playAlert, takeScreenshot])
 
   useEffect(() => {
     if (running) {
@@ -277,7 +306,9 @@ export default function App() {
   const s = statusConfig[status]
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-6">
+    <div className={`min-h-screen p-6 transition-colors duration-300 ${
+      darkMode ? "bg-gray-950 text-white" : "bg-gray-100 text-gray-900"
+    }`}>
       <div className="max-w-6xl mx-auto">
 
         <div className="flex items-center justify-between mb-8">
@@ -285,12 +316,24 @@ export default function App() {
             <h1 className="text-3xl font-bold text-white tracking-tight">Worker Fatigue Detection</h1>
             <p className="text-gray-400 mt-1 text-sm">Real-time monitoring using Computer Vision & Deep Learning</p>
           </div>
-          <div className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-full border ${
-            apiOnline ? "text-green-400 bg-green-900/30 border-green-700"
-                      : "text-red-400 bg-red-900/30 border-red-700"
-          }`}>
-            {apiOnline ? <Wifi size={14}/> : <WifiOff size={14}/>}
-            {apiOnline ? "API Online" : "API Offline"}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setDarkMode(v => !v)}
+              className={`text-sm px-3 py-1.5 rounded-full border transition-colors ${
+                darkMode
+                  ? "border-gray-600 text-gray-400 hover:border-gray-400"
+                  : "border-gray-300 text-gray-600 hover:border-gray-500"
+              }`}
+            >
+              {darkMode ? "Light mode" : "Dark mode"}
+            </button>
+            <div className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-full border ${
+              apiOnline ? "text-green-400 bg-green-900/30 border-green-700"
+                        : "text-red-400 bg-red-900/30 border-red-700"
+            }`}>
+              {apiOnline ? <Wifi size={14}/> : <WifiOff size={14}/>}
+              {apiOnline ? "API Online" : "API Offline"}
+            </div>
           </div>
         </div>
 
@@ -417,10 +460,32 @@ export default function App() {
             </div>
 
             <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
-              <div className="flex justify-between items-center mb-2">
-                <p className="text-xs text-gray-400 uppercase tracking-wider">EAR threshold</p>
-                <p className="text-sm font-medium text-white">{earThreshold.toFixed(2)}</p>
+              <div className="flex justify-between items-center mb-3">
+                <p className="text-xs text-gray-400 uppercase tracking-wider">Sensitivity preset</p>
+                <p className="text-sm font-medium text-white">EAR: {earThreshold.toFixed(2)}</p>
               </div>
+
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {[
+                  { label: "Light",    value: 0.15, desc: "Office worker",   color: "border-green-600  text-green-400"  },
+                  { label: "Normal",   value: 0.20, desc: "Standard",        color: "border-yellow-600 text-yellow-400" },
+                  { label: "Heavy",    value: 0.26, desc: "Machinery",       color: "border-red-600    text-red-400"    },
+                ].map(preset => (
+                  <button
+                    key={preset.label}
+                    onClick={() => setEarThreshold(preset.value)}
+                    className={`border rounded-xl p-2 text-center transition-all ${
+                      earThreshold === preset.value
+                        ? `${preset.color} bg-gray-800`
+                        : "border-gray-700 text-gray-400 hover:border-gray-500"
+                    }`}
+                  >
+                    <p className="text-xs font-semibold">{preset.label}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{preset.desc}</p>
+                  </button>
+                ))}
+              </div>
+
               <input
                 type="range" min="0.10" max="0.30" step="0.01"
                 value={earThreshold}
@@ -428,8 +493,8 @@ export default function App() {
                 className="w-full accent-green-500"
               />
               <div className="flex justify-between text-xs text-gray-500 mt-1">
-                <span>0.10 (less sensitive)</span>
-                <span>0.30 (more sensitive)</span>
+                <span>0.10 less sensitive</span>
+                <span>0.30 more sensitive</span>
               </div>
             </div>
 
@@ -449,11 +514,6 @@ export default function App() {
                 <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">EAR Score</p>
                 <p className="text-2xl font-bold text-white">{ear.toFixed(3)}</p>
                 <p className="text-xs text-gray-500 mt-1">Threshold: {earThreshold.toFixed(2)}</p>
-              </div>
-              <div className="bg-gray-900 border border-gray-700 rounded-xl p-4">
-                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">CNN Score</p>
-                <p className="text-2xl font-bold text-white">{cnnScore.toFixed(3)}</p>
-                <p className="text-xs text-gray-500 mt-1">Threshold: 0.5</p>
               </div>
             </div>
 
