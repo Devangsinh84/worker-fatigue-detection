@@ -39,7 +39,7 @@ worker-fatigue-detection/
 ├── calibrate.py            # Personal EAR threshold calibration tool
 ├── explore_data.py         # Dataset exploration and visualization script
 ├── requirements.txt        # Python dependencies
-├── models/
+├── models/                   # Created locally (git-ignored), see Getting Started
 │   ├── eye_state_model.keras   # Trained CNN model weights
 │   ├── face_landmarker.task    # MediaPipe face landmark model
 │   └── ear_threshold.txt       # Saved personal EAR threshold
@@ -52,7 +52,7 @@ worker-fatigue-detection/
 │   ├── index.html
 │   ├── vite.config.js
 │   └── package.json
-├── data/
+├── data/                     # MRL Eye Dataset, downloaded locally (git-ignored)
 │   └── train/
 │       ├── Closed_Eyes/    # 2000 closed eye images
 │       └── Open_Eyes/      # 2000 open eye images
@@ -150,7 +150,7 @@ Dense(1) → Sigmoid
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/worker-fatigue-detection.git
+git clone https://github.com/Devangsinh84/worker-fatigue-detection.git
 cd worker-fatigue-detection
 ```
 
@@ -168,9 +168,31 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Calibrate your personal EAR threshold
+### 3. Download the dataset and train the CNN
 
-This step measures your individual eye openness baseline for accurate detection.
+The trained model and the dataset are not committed (they are git-ignored), so create them locally:
+
+1. Download the [MRL Eye Dataset](https://www.kaggle.com/datasets/tauilabdelilah/mrl-eye-dataset) from Kaggle.
+2. Place the images in `data/train/Closed_Eyes/` and `data/train/Open_Eyes/`.
+3. Train the model (this writes `models/eye_state_model.keras`):
+
+```bash
+mkdir -p models
+python train_model.py
+```
+
+### 4. Download the MediaPipe face landmarker
+
+```bash
+curl -L -o models/face_landmarker.task \
+  https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+```
+
+(`api.py` also downloads it automatically on first start if it is missing.)
+
+### 5. Calibrate your personal EAR threshold (optional)
+
+This step measures your individual eye openness baseline for accurate detection. If you skip it, the API uses a default threshold of 0.204.
 
 ```bash
 python calibrate.py
@@ -178,7 +200,7 @@ python calibrate.py
 
 Follow the on-screen instructions. Your threshold will be saved to `models/ear_threshold.txt`.
 
-### 4. Start the backend
+### 6. Start the backend
 
 ```bash
 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
@@ -186,7 +208,7 @@ uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 
 The API will be available at `http://localhost:8000`. You can explore the auto-generated docs at `http://localhost:8000/docs`.
 
-### 5. Start the frontend
+### 7. Start the frontend
 
 ```bash
 cd frontend
@@ -194,7 +216,7 @@ npm install
 npm run dev
 ```
 
-### 6. Open the dashboard
+### 8. Open the dashboard
 
 Navigate to `http://localhost:5173` in your browser.
 
